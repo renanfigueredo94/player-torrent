@@ -31,6 +31,36 @@ const setup = Promise.all([engine,prepareStream()])
 setup.catch(()=>{})
 let generation = 0
 const metadata = new Map()
+// Keep a rolling window of verified pieces. WebTorrent 2.5.19 must also
+// forget an evicted piece so seeking back requests it from the swarm again.
+class PlaybackStore {
+  constructor(pieceLength, {torrent}) {
+    this.torrent = torrent
+    this.cache = new Map()
+    this.limit = Math.max(8, Math.floor(64 * 1024 * 1024 / pieceLength))
+  }
+  put(index, bytes, callback) {
+    this.cache.set(index, bytes)
+    if (this.cache.size > this.limit) {
+      const oldest = this.cache.keys().next().value
+      this.cache.delete(oldest)
+      this.torrent._markUnverified(oldest)
+    }
+    queueMicrotask(() => callback?.(null))
+  }
+  get(index, options, callback) {
+    if (typeof options === 'function') { callback = options; options = {} }
+    const bytes = this.cache.get(index)
+    if (!bytes) return queueMicrotask(() => callback(new Error('Trecho indisponível')))
+    this.cache.delete(index)
+    this.cache.set(index, bytes)
+    const offset = options?.offset || 0
+    const end = options?.length == null ? bytes.length : offset + options.length
+    queueMicrotask(() => callback(null,bytes.subarray(offset,end)))
+  }
+  close(callback) { this.cache.clear(); queueMicrotask(() => callback?.(null)) }
+  destroy(callback) { this.close(callback) }
+}
 const el = id => document.getElementById(id)
 let client, torrent, videos = []
 const statusText = msg => { el('status').textContent = msg }
@@ -95,7 +125,7 @@ async function start(){
     statusText('Procurando fontes e informações do torrent…')
     const params = new URLSearchParams(magnet.slice(8))
     const key = magnet
-    const options = {deselect:true, strategy:'sequential', destroyStoreOnDestroy:true, path:'player-' + crypto.randomUUID()}
+    const options = {deselect:true, strategy:'sequential', store:PlaybackStore, storeCacheSlots:0, destroyStoreOnDestroy:true}
     if(!params.getAll('tr').some(url=>/^wss:/i.test(url))) options.announce = ['wss://tracker.openwebtorrent.com','wss://tracker.webtorrent.dev']
     torrent = session.add(metadata.get(key) || magnet,options,item=>{
       if(session !== client) return
@@ -122,7 +152,7 @@ el('demo').onclick = () => {
   start()
 }
 setInterval(()=>{
-  if(torrent) el('stats').textContent = torrent.numPeers+' conexões · '+Math.round(torrent.downloadSpeed/1024)+' KiB/s · '+Math.floor(torrent.progress*100)+'% recebido'
+  if(torrent) el('stats').textContent = torrent.numPeers+' conexões · '+Math.round(torrent.downloadSpeed/1024)+' KiB/s · '+Math.floor(torrent.progress*100)+'% em buffer'
 },1000)
 </script>
 </html>
