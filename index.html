@@ -81,6 +81,13 @@ async function start(){
     const [{default: WebTorrent}, registration] = await setup
     if(attempt !== generation) return
     const session = client = new WebTorrent()
+    // An update may replace the active worker between page load and pressing Play.
+    const deadline = Date.now() + 12000
+    while (registration.active?.state !== 'activated') {
+      if (Date.now() >= deadline) throw new Error('Recarregue a página para ativar o streaming.')
+      await new Promise(resolve => setTimeout(resolve,100))
+      if (attempt !== generation) return
+    }
     session.createServer({controller:registration})
     const fail = () => { if(client === session){ stop(); statusText('Falha na conexão com o torrent. Tente novamente.') } }
     session.on('error',fail)
