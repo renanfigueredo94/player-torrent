@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Player Torrent</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101418;color:#eff5f4;font:16px/1.5 "Segoe UI",sans-serif}main{max-width:900px;margin:auto;padding:5vh 20px}h1{letter-spacing:-.045em;font-size:clamp(2rem,5vw,3.4rem);margin:0 0 1rem}form{display:flex;gap:8px;flex-wrap:wrap}input,button,select{font:inherit;border-radius:8px;padding:10px 14px;border:1px solid #576264;color:inherit;background:#20292a}input{min-width:0;flex:1 1 260px}button{cursor:pointer}button[type=submit]{background:#a0ecd4;color:#102822;font-weight:650}video{display:block;width:100%;aspect-ratio:16/9;background:#050708;border-radius:12px;margin:18px 0}small{color:#aed4ca}select{max-width:100%}p{margin:.65em 0}
+</style>
+<main><h1>Player Torrent</h1>
+<form><input id="magnet" aria-label="Link magnet" placeholder="Cole o link magnet" required><button type="submit">Reproduzir</button></form>
+<p><button id="demo">Testar com Sintel</button> <button id="stop" hidden>Parar</button></p>
+<p id="files" hidden><label>Vídeo <select id="choice"></select></label></p>
+<div id="screen"><video controls playsinline aria-label="Reprodutor de vídeo"></video></div>
+<p id="status" role="status">Aguardando um magnet.</p><small id="stats"></small></main>
+<script src="https://cdn.jsdelivr.net/npm/webtorrent@1.9.7/webtorrent.min.js"></script>
+<script>
+const el = id => document.getElementById(id)
+let client, torrent, videos = []
+const statusText = msg => { el('status').textContent = msg }
+function stop(){
+  const old = client
+  client = torrent = null
+  videos = []
+  if(old && !old.destroyed) old.destroy()
+  const video = document.querySelector('video')
+  video.pause()
+  video.removeAttribute('src')
+  video.load()
+  el('choice').replaceChildren()
+  el('files').hidden = el('stop').hidden = true
+  el('stats').textContent = ''
+}
+function showVideo(){
+  const file = videos[Number(el('choice').value)]
+  const video = document.createElement('video')
+  video.controls = video.playsInline = true
+  video.setAttribute('aria-label',file.name)
+  el('screen').replaceChildren(video)
+  const current = () => client && video.isConnected
+  const fail = () => { if(current()) statusText('Falha ao reproduzir. Confira as fontes ou escolha outro vídeo.') }
+  video.onerror = fail
+  video.onplaying = () => { if(current()) statusText(file.name) }
+  video.oncanplay = () => { if(current() && video.paused) statusText('Vídeo pronto. Toque em reproduzir.') }
+  statusText('Carregando o vídeo…')
+  file.renderTo(video,{autoplay:true},err => { if(err) fail() })
+}
+function start(){
+  const magnet = el('magnet').value.trim()
+  if(!/^magnet:\?/i.test(magnet) || !new URLSearchParams(magnet.slice(8)).getAll('xt').some(xt=>/^urn:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})$/i.test(xt))){
+    el('magnet').setCustomValidity('Insira um magnet válido com identificador BitTorrent v1.')
+    el('magnet').reportValidity()
+    return
+  }
+  stop()
+  if(!window.WebTorrent) return statusText('Falha ao carregar o WebTorrent. Confira a conexão e recarregue a página.')
+  if(!WebTorrent.WEBRTC_SUPPORT) return statusText('Este navegador precisa de suporte a WebRTC.')
+  try{
+    const session = client = new WebTorrent()
+    const fail = () => { if(client === session){ stop(); statusText('Falha na conexão com o torrent. Tente novamente.') } }
+    session.on('error',fail)
+    el('stop').hidden = false
+    statusText('Procurando fontes e informações do torrent…')
+    torrent = session.add(magnet,{},item=>{
+      if(session !== client) return
+      videos = item.files.filter(f=>/\.(mp4|m4v|webm|ogv|mov|mkv|avi)$/i.test(f.name)).sort((a,b)=>b.length-a.length)
+      if(!videos.length){ stop(); statusText('Nenhum arquivo de vídeo encontrado.'); return }
+      videos.forEach((f,i)=>el('choice').add(new Option(f.name,i)))
+      el('files').hidden = videos.length < 2
+      showVideo()
+    })
+    torrent.on('error',fail)
+  }catch{ stop(); statusText('Falha ao abrir o torrent.') }
+}
+document.querySelector('form').onsubmit = event => { event.preventDefault(); start() }
+el('magnet').oninput = () => el('magnet').setCustomValidity('')
+el('choice').onchange = showVideo
+el('stop').onclick = () => { stop(); statusText('Reprodução encerrada.') }
+el('demo').onclick = () => {
+  el('magnet').value = 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=wss://tracker.openwebtorrent.com&ws=https://webtorrent.io/torrents/&xs=https://webtorrent.io/torrents/sintel.torrent'
+  el('magnet').setCustomValidity('')
+  start()
+}
+setInterval(()=>{
+  if(torrent) el('stats').textContent = torrent.numPeers+' conexões · '+Math.round(torrent.downloadSpeed/1024)+' KiB/s · '+Math.floor(torrent.progress*100)+'% recebido'
+},1000)
+</script>
+</html>
