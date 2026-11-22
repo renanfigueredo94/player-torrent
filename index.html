@@ -11,12 +11,24 @@
 <p id="files" hidden><label>Vídeo <select id="choice"></select></label></p>
 <div id="screen"><video controls playsinline aria-label="Reprodutor de vídeo"></video></div>
 <p id="status" role="status">Aguardando um magnet.</p><small id="stats"></small></main>
-<script src="https://cdn.jsdelivr.net/npm/webtorrent@1.9.7/webtorrent.min.js"></script>
-<script>
+<script type="module">
+const engine = import('https://cdn.jsdelivr.net/npm/webtorrent@2.5.19/dist/webtorrent.min.js')
+async function prepareStream() {
+  await navigator.serviceWorker.register('./sw.js',{type:'module'})
+  const registration = await navigator.serviceWorker.ready
+  if (!navigator.serviceWorker.controller)
+    await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange',resolve,{once:true}))
+  return registration
+}
+const setup = Promise.all([engine,prepareStream()])
+setup.catch(()=>{})
+let generation = 0
+const metadata = new Map()
 const el = id => document.getElementById(id)
 let client, torrent, videos = []
 const statusText = msg => { el('status').textContent = msg }
 function stop(){
+  generation++
   const old = client
   client = torrent = null
   videos = []
@@ -41,9 +53,13 @@ function showVideo(){
   video.onplaying = () => { if(current()) statusText(file.name) }
   video.oncanplay = () => { if(current() && video.paused) statusText('Vídeo pronto. Toque em reproduzir.') }
   statusText('Carregando o vídeo…')
-  file.renderTo(video,{autoplay:true},err => { if(err) fail() })
+  video.preload = 'auto'
+  video.src = file.streamURL
+  video.play().catch(err => {
+    if(current() && err.name === 'NotAllowedError') statusText('Vídeo pronto. Toque em reproduzir.')
+  })
 }
-function start(){
+async function start(){
   const magnet = el('magnet').value.trim()
   if(!/^magnet:\?/i.test(magnet) || !new URLSearchParams(magnet.slice(8)).getAll('xt').some(xt=>/^urn:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})$/i.test(xt))){
     el('magnet').setCustomValidity('Insira um magnet válido com identificador BitTorrent v1.')
@@ -51,16 +67,28 @@ function start(){
     return
   }
   stop()
-  if(!window.WebTorrent) return statusText('Falha ao carregar o WebTorrent. Confira a conexão e recarregue a página.')
-  if(!WebTorrent.WEBRTC_SUPPORT) return statusText('Este navegador precisa de suporte a WebRTC.')
+  const attempt = generation
+  statusText('Preparando a conexão…')
+  el('stop').hidden = false
   try{
+    const [{default: WebTorrent}, registration] = await setup
+    if(attempt !== generation) return
     const session = client = new WebTorrent()
+    session.createServer({controller:registration})
     const fail = () => { if(client === session){ stop(); statusText('Falha na conexão com o torrent. Tente novamente.') } }
     session.on('error',fail)
     el('stop').hidden = false
     statusText('Procurando fontes e informações do torrent…')
-    torrent = session.add(magnet,{},item=>{
+    const params = new URLSearchParams(magnet.slice(8))
+    const key = magnet
+    const options = {deselect:true, strategy:'sequential'}
+    if(!params.getAll('tr').some(url=>/^wss:/i.test(url))) options.announce = ['wss://tracker.openwebtorrent.com','wss://tracker.webtorrent.dev']
+    torrent = session.add(metadata.get(key) || magnet,options,item=>{
       if(session !== client) return
+      if(!item.private && item.torrentFile?.length <= 2000000){
+        metadata.set(key,item.torrentFile)
+        if(metadata.size > 8) metadata.delete(metadata.keys().next().value)
+      }
       videos = item.files.filter(f=>/\.(mp4|m4v|webm|ogv|mov|mkv|avi)$/i.test(f.name)).sort((a,b)=>b.length-a.length)
       if(!videos.length){ stop(); statusText('Nenhum arquivo de vídeo encontrado.'); return }
       videos.forEach((f,i)=>el('choice').add(new Option(f.name,i)))
@@ -68,14 +96,14 @@ function start(){
       showVideo()
     })
     torrent.on('error',fail)
-  }catch{ stop(); statusText('Falha ao abrir o torrent.') }
+  }catch{ if(attempt !== generation) return; stop(); statusText('Falha ao abrir o torrent.') }
 }
 document.querySelector('form').onsubmit = event => { event.preventDefault(); start() }
 el('magnet').oninput = () => el('magnet').setCustomValidity('')
 el('choice').onchange = showVideo
 el('stop').onclick = () => { stop(); statusText('Reprodução encerrada.') }
 el('demo').onclick = () => {
-  el('magnet').value = 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=wss://tracker.openwebtorrent.com&ws=https://webtorrent.io/torrents/&xs=https://webtorrent.io/torrents/sintel.torrent'
+  el('magnet').value = 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=wss://tracker.openwebtorrent.com&tr=wss://tracker.webtorrent.dev&ws=https://webtorrent.io/torrents/&xs=https://webtorrent.io/torrents/sintel.torrent'
   el('magnet').setCustomValidity('')
   start()
 }
@@ -84,3 +112,4 @@ setInterval(()=>{
 },1000)
 </script>
 </html>
+
