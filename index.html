@@ -89,13 +89,13 @@ async function start(){
       if (attempt !== generation) return
     }
     session.createServer({controller:registration})
-    const fail = () => { if(client === session){ stop(); statusText('Falha na conexão com o torrent. Tente novamente.') } }
+    const fail = error => { if(client === session){ stop(); statusText('Falha no torrent. ' + (error?.message || 'Tente novamente.')) } }
     session.on('error',fail)
     el('stop').hidden = false
     statusText('Procurando fontes e informações do torrent…')
     const params = new URLSearchParams(magnet.slice(8))
     const key = magnet
-    const options = {deselect:true, strategy:'sequential'}
+    const options = {deselect:true, strategy:'sequential', destroyStoreOnDestroy:true, path:'player-' + crypto.randomUUID()}
     if(!params.getAll('tr').some(url=>/^wss:/i.test(url))) options.announce = ['wss://tracker.openwebtorrent.com','wss://tracker.webtorrent.dev']
     torrent = session.add(metadata.get(key) || magnet,options,item=>{
       if(session !== client) return
